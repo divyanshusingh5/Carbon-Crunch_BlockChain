@@ -62,3 +62,23 @@ const handler = async (req, res) => {
 };
 
 export default handler;
+
+
+apis.js from here.........................................................................................................4
+const apis = [
+  { 
+    id: 1, 
+    name: 'GPT-3.5 Turbo', 
+    endpointUrl: 'gpt-4o-mini',
+    model: 'gpt-4o-mini'
+  },
+  // You can add more models here if needed
+  // {
+  //   id: 2,
+  //   name: 'GPT-4',
+  //   endpointUrl: 'gpt4',
+  //   model: 'gpt-4'
+  // },
+];
+
+export default apis;
