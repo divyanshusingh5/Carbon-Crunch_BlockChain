@@ -1,63 +1,198 @@
-import os
-from langchain.indexes import VectorstoreIndexCreator
-from langchain_community.document_loaders.figma import FigmaFileLoader
-from langchain_core.prompts.chat import (
-    ChatPromptTemplate,
-    HumanMessagePromptTemplate,
-    SystemMessagePromptTemplate,
-)
-from langchain_openai import ChatOpenAI
+from pydantic import BaseModel, AnyUrl
+from typing import List, Optional, Dict, Union
 
-# Setup Figma File Loader
-figma_loader = FigmaFileLoader(
-    os.environ.get("ACCESS_TOKEN"),  # Your Figma access token
-    os.environ.get("NODE_IDS", ""),  # Optional: Node IDs, or leave blank for the whole document
-    os.environ.get("FILE_KEY")  # The Figma file key
-)
+# Basic Global Properties common across all nodes
+class Node(BaseModel):
+    id: str
+    name: str
+    visible: bool = True
+    type: str
+    rotation: Optional[float] = 0
+    pluginData: Optional[Any]
+    sharedPluginData: Optional[Any]
+    componentPropertyReferences: Optional[Dict[str, str]]
+    boundVariables: Optional[Dict[str, Union[str, List[str], Dict[str, str]]]]
+    explicitVariableModes: Optional[Dict[str, str]]
 
-# Index the Figma document
-index = VectorstoreIndexCreator().from_loaders([figma_loader])
-figma_doc_retriever = index.vectorstore.as_retriever()
+# Color type (RGBA)
+class Color(BaseModel):
+    r: float
+    g: float
+    b: float
+    a: float
 
-def generate_code(human_input):
-    # System message template to instruct the model
-    system_prompt_template = """You are expert coder Jon Carmack. Use the provided design context to create idiomatic HTML/CSS code as possible based on the user request.
-    Everything must be inline in one file and your response must be directly renderable by the browser.
-    Figma file nodes and metadata: {context}"""
+# Export settings for nodes
+class ExportSetting(BaseModel):
+    suffix: Optional[str]
+    format: str  # JPG, PNG, SVG
+    constraint: Optional[Dict[str, Union[str, float]]]  # For scaling or size
 
-    # Human prompt asking for a specific element
-    human_prompt_template = "Code the {text}. Ensure it's mobile responsive"
-    
-    # Create system and human message prompts
-    system_message_prompt = SystemMessagePromptTemplate.from_template(system_prompt_template)
-    human_message_prompt = HumanMessagePromptTemplate.from_template(human_prompt_template)
+# Rectangle model for bounding boxes
+class Rectangle(BaseModel):
+    x: float
+    y: float
+    width: float
+    height: float
 
-    # Use the gpt-4-0-mini model for response generation
-    chat_model = ChatOpenAI(temperature=0.02, model_name="gpt-4-0-mini")  # Update to gpt-4-0-mini
+# Vector model for size
+class Vector(BaseModel):
+    x: float
+    y: float
 
-    # Retrieve relevant nodes from the Figma file
-    relevant_nodes = figma_doc_retriever.invoke(human_input)
+# Effect Model (e.g., shadows, blurs)
+class Effect(BaseModel):
+    type: str  # INNER_SHADOW, DROP_SHADOW, LAYER_BLUR, BACKGROUND_BLUR
+    visible: bool = True
+    radius: float
+    color: Optional[Color]
+    blendMode: Optional[str]
+    offset: Optional[Vector]
+    spread: Optional[float] = 0
 
-    # Format the chat conversation
-    conversation = [system_message_prompt, human_message_prompt]
-    chat_prompt = ChatPromptTemplate.from_messages(conversation)
+# Paint Model (for fills, strokes)
+class Paint(BaseModel):
+    type: str  # SOLID, GRADIENT_LINEAR, IMAGE, etc.
+    visible: bool = True
+    opacity: float = 1.0
+    color: Optional[Color]
+    gradientHandlePositions: Optional[List[Vector]]
+    gradientStops: Optional[List[Dict[str, Union[float, Color]]]]
+    imageRef: Optional[str]
 
-    # Generate a response using the model
-    response = chat_model(
-        chat_prompt.format_prompt(
-            context=relevant_nodes, text=human_input
-        ).to_messages()
-    )
-    return response
+# Transform Matrix
+class Transform(BaseModel):
+    matrix: List[List[float]]
 
-# Example usage
-response = generate_code("page top header")
-print(response.content)
-# Figma API Access Token
-ACCESS_TOKEN=your_figma_access_token_here
+# Common properties for frame and instance nodes
+class Frame(Node):
+    children: List[Node]
+    locked: bool = False
+    backgroundColor: Optional[Color]
+    fills: List[Paint] = []
+    strokes: List[Paint] = []
+    strokeWeight: Optional[float]
+    strokeAlign: Optional[str]  # INSIDE, OUTSIDE, CENTER
+    cornerRadius: Optional[float]
+    size: Vector
+    relativeTransform: Optional[Transform]
+    absoluteBoundingBox: Optional[Rectangle]
+    opacity: float = 1
+    effects: List[Effect] = []
+    exportSettings: List[ExportSetting] = []
 
-# Figma File Key (from the URL)
-FILE_KEY=your_figma_file_key_here
+# Vector node model (extends Frame with vector-specific properties)
+class Vector(Frame):
+    strokeDashes: Optional[List[float]]
+    strokeCap: Optional[str]  # NONE, ROUND, SQUARE, LINE_ARROW, etc.
+    strokeJoin: Optional[str]  # MITER, BEVEL, ROUND
+    strokeMiterAngle: Optional[float] = 28.96
 
-# Optional: Figma Node IDs (comma-separated if multiple, or leave blank)
-NODE_IDS=your_node_ids_here
+# Text Style (for TEXT nodes)
+class TextStyle(BaseModel):
+    fontFamily: str
+    fontPostScriptName: Optional[str]
+    paragraphSpacing: Optional[float]
+    paragraphIndent: Optional[float]
+    fontWeight: Optional[float]
+    fontSize: float
+    textAlignHorizontal: Optional[str]  # LEFT, RIGHT, CENTER, etc.
+    textAlignVertical: Optional[str]  # TOP, CENTER, BOTTOM
+    letterSpacing: Optional[float]
+    lineHeight: Optional[float]
+
+# Text node model (inherits Vector and adds text-specific fields)
+class Text(Vector):
+    characters: str
+    style: TextStyle
+    styleOverrideTable: Optional[Dict[int, TextStyle]]
+    characterStyleOverrides: Optional[List[int]] = []
+
+# Component model (inherits from Frame)
+class Component(Frame):
+    componentPropertyDefinitions: Dict[str, Any] = {}
+
+# Component Set Model
+class ComponentSet(Frame):
+    componentPropertyDefinitions: Dict[str, Any] = {}
+
+# Instance Model (inherits Frame and Component specific fields)
+class Instance(Frame):
+    componentId: str
+    isExposedInstance: bool = False
+    exposedInstances: List[str] = []
+    componentProperties: Dict[str, Union[str, bool]] = {}
+    overrides: Optional[List[str]] = []
+
+# Canvas Model (inherits Node)
+class Canvas(Node):
+    children: List[Frame]
+    backgroundColor: Optional[Color]
+
+# Document model (inherits Node and represents the root of the Figma document)
+class Document(Node):
+    children: List[Canvas]
+
+# FlowStartingPoint model
+class FlowStartingPoint(BaseModel):
+    nodeId: str
+    name: str
+
+# PrototypeDevice model
+class PrototypeDevice(BaseModel):
+    type: str  # NONE, PRESET, CUSTOM, PRESENTATION
+    size: Vector
+    presetIdentifier: Optional[str]
+    rotation: Optional[str]  # NONE, CCW_90
+
+# API response schema for Figma file
+class FigmaAPIResponse(BaseModel):
+    document: Document
+    schemaVersion: str
+    name: str
+    lastModified: str
+    thumbnailUrl: AnyUrl
+    version: str
+    role: str
+    flowStartingPoints: Optional[List[FlowStartingPoint]] = []
+    prototypeDevice: Optional[PrototypeDevice]
+......................
+
+
+        import json
+from pydantic import ValidationError
+from typing import Any
+from pathlib import Path
+from pydantic.error_wrappers import display_errors
+from figma_pydantic_schema import FigmaAPIResponse  # Adjust the import path as needed
+
+# Function to load a JSON file
+def load_json(filepath: str) -> Any:
+    """Load JSON data from a file."""
+    with open(filepath, 'r') as file:
+        return json.load(file)
+
+# Function to validate the Figma API response against the Pydantic schema
+def validate_figma_response(data: dict) -> None:
+    """Validate the Figma API response using Pydantic schema."""
+    try:
+        # Validate the data using the FigmaAPIResponse schema
+        FigmaAPIResponse.parse_obj(data)
+        print("Validation succeeded!")
+    except ValidationError as e:
+        # Handle validation errors and provide detailed feedback
+        print("Validation failed!")
+        for error in e.errors():
+            loc = " -> ".join(str(step) for step in error['loc'])  # JSON path of the error
+            print(f"Error at {loc}: {error['msg']} (expected: {error['type']})")
+        # Optional: print detailed errors using Pydantic's built-in display
+        print(display_errors(e.errors()))
+
+# Main script to load and validate the JSON response
+if __name__ == "__main__":
+    # Load the Figma API response from a file (adjust the path as needed)
+    figma_file_path = 'figma_response.json'  # Change to the path of your Figma API response JSON
+    figma_data = load_json(figma_file_path)
+
+    # Validate the JSON response
+    validate_figma_response(figma_data)
+
