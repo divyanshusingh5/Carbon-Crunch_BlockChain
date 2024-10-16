@@ -1,84 +1,55 @@
-import OpenAI from 'openai';
+import os
+from langchain.indexes import VectorstoreIndexCreator
+from langchain_community.document_loaders.figma import FigmaFileLoader
+from langchain_core.prompts.chat import (
+    ChatPromptTemplate,
+    HumanMessagePromptTemplate,
+    SystemMessagePromptTemplate,
+)
+from langchain_openai import ChatOpenAI
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+# Setup Figma File Loader
+figma_loader = FigmaFileLoader(
+    os.environ.get("ACCESS_TOKEN"),  # Your Figma access token
+    os.environ.get("NODE_IDS", ""),  # Optional: Node IDs, or leave blank for the whole document
+    os.environ.get("FILE_KEY")  # The Figma file key
+)
 
-const handler = async (req, res) => {
-  // Check if the API key is set
-  if (!process.env.OPENAI_API_KEY) {
-    return res.status(401).json({
-      error: 'OPENAI_API_KEY not set. Please set the key in your environment and redeploy the app to use this endpoint',
-    });
-  }
+# Index the Figma document
+index = VectorstoreIndexCreator().from_loaders([figma_loader])
+figma_doc_retriever = index.vectorstore.as_retriever()
 
-  // Ensure the request is a POST request
-  if (req.method !== 'POST') {
-    return res.status(405).json({
-      error: 'Only POST method allowed',
-    });
-  }
+def generate_code(human_input):
+    # System message template to instruct the model
+    system_prompt_template = """You are expert coder Jon Carmack. Use the provided design context to create idiomatic HTML/CSS code as possible based on the user request.
+    Everything must be inline in one file and your response must be directly renderable by the browser.
+    Figma file nodes and metadata: {context}"""
 
-  // Validate if the request contains a prompt
-  if (!req.body.prompt) {
-    return res.status(400).json({
-      error: 'Request body must contain a prompt',
-    });
-  }
+    # Human prompt asking for a specific element
+    human_prompt_template = "Code the {text}. Ensure it's mobile responsive"
+    
+    # Create system and human message prompts
+    system_message_prompt = SystemMessagePromptTemplate.from_template(system_prompt_template)
+    human_message_prompt = HumanMessagePromptTemplate.from_template(human_prompt_template)
 
-  try {
-    const input = req.body.prompt;
+    # Use the gpt-4-0-mini model for response generation
+    chat_model = ChatOpenAI(temperature=0.02, model_name="gpt-4-0-mini")  # Update to gpt-4-0-mini
 
-    // Create a chat completion request
-    const response = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo', // Assuming you meant 'gpt-3.5-turbo' or another valid model
-      messages: [
-        { role: 'system', content: 'You are a helpful assistant that provides HTML code with inline CSS styling.' },
-        { role: 'user', content: input }
-      ],
-      temperature: 0.7,
-      max_tokens: 1024,
-      top_p: 1,
-      frequency_penalty: 0,
-      presence_penalty: 0,
-    });
+    # Retrieve relevant nodes from the Figma file
+    relevant_nodes = figma_doc_retriever.invoke(human_input)
 
-    const completion = response.choices[0].message.content.trim();
+    # Format the chat conversation
+    conversation = [system_message_prompt, human_message_prompt]
+    chat_prompt = ChatPromptTemplate.from_messages(conversation)
 
-    return res.status(200).json({ completion });
-  } catch (error) {
-    console.error('OpenAI API error:', error.response?.data || error.message);
+    # Generate a response using the model
+    response = chat_model(
+        chat_prompt.format_prompt(
+            context=relevant_nodes, text=human_input
+        ).to_messages()
+    )
+    return response
 
-    if (error.response?.status === 401) {
-      return res.status(401).json({ error: 'Invalid OpenAI API key' });
-    }
-
-    if (error.response?.status === 429) {
-      return res.status(429).json({ error: 'OpenAI API rate limit exceeded' });
-    }
-
-    return res.status(500).json({ error: 'An error occurred while processing your request' });
-  }
-};
-
-export default handler;
-
-
-apis.js from here.........................................................................................................4
-const apis = [
-  { 
-    id: 1, 
-    name: 'GPT-3.5 Turbo', 
-    endpointUrl: 'gpt-4o-mini',
-    model: 'gpt-4o-mini'
-  },
-  // You can add more models here if needed
-  // {
-  //   id: 2,
-  //   name: 'GPT-4',
-  //   endpointUrl: 'gpt4',
-  //   model: 'gpt-4'
-  // },
-];
-
-export default apis;
+# Example usage
+response = generate_code("page top header")
+print(response.content)
