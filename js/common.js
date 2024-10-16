@@ -53,3 +53,11 @@ def generate_code(human_input):
 # Example usage
 response = generate_code("page top header")
 print(response.content)
+# Figma API Access Token
+ACCESS_TOKEN=your_figma_access_token_here
+
+# Figma File Key (from the URL)
+FILE_KEY=your_figma_file_key_here
+
+# Optional: Figma Node IDs (comma-separated if multiple, or leave blank)
+NODE_IDS=your_node_ids_here
