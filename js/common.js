@@ -1,198 +1,171 @@
-from pydantic import BaseModel, AnyUrl
-from typing import List, Optional, Dict, Union
+// Define the required types
+type Color = {
+  r: number;
+  g: number;
+};
 
-# Basic Global Properties common across all nodes
-class Node(BaseModel):
-    id: str
-    name: str
-    visible: bool = True
-    type: str
-    rotation: Optional[float] = 0
-    pluginData: Optional[Any]
-    sharedPluginData: Optional[Any]
-    componentPropertyReferences: Optional[Dict[str, str]]
-    boundVariables: Optional[Dict[str, Union[str, List[str], Dict[str, str]]]]
-    explicitVariableModes: Optional[Dict[str, str]]
+type Position = {
+  x: number;
+  y: number;
+};
 
-# Color type (RGBA)
-class Color(BaseModel):
-    r: float
-    g: float
-    b: float
-    a: float
+type Rectangle = {
+  position: Position;
+  color: Color;
+  width: number;
+  height: number;
+  strokeWeight?: number;
+  cornerRadius?: number;
+  dropShadow?: number;
+};
 
-# Export settings for nodes
-class ExportSetting(BaseModel):
-    suffix: Optional[str]
-    format: str  # JPG, PNG, SVG
-    constraint: Optional[Dict[str, Union[str, float]]]  # For scaling or size
+type CustomTextNode = {
+  name: string;
+  type: "TEXT";
+  text: {
+    content: string; // The text content
+    fontSize?: number; // Optional font size
+    color?: Color; // Optional text color
+    fontName?: { family: string; style: string }; // Optional font name
+    position?: Position; // Optional position
+  };
+};
 
-# Rectangle model for bounding boxes
-class Rectangle(BaseModel):
-    x: float
-    y: float
-    width: float
-    height: float
+// Update the Node type to include both Rectangle and CustomTextNode
+type Node = { type: "RECTANGLE"; name: string; node: Rectangle } | CustomTextNode;
 
-# Vector model for size
-class Vector(BaseModel):
-    x: float
-    y: float
+type Scene = Array<Node>;
 
-# Effect Model (e.g., shadows, blurs)
-class Effect(BaseModel):
-    type: str  # INNER_SHADOW, DROP_SHADOW, LAYER_BLUR, BACKGROUND_BLUR
-    visible: bool = True
-    radius: float
-    color: Optional[Color]
-    blendMode: Optional[str]
-    offset: Optional[Vector]
-    spread: Optional[float] = 0
+// Utility function to clone objects
+const clone = (x: object | Array<any>): Array<any> => {
+  return JSON.parse(JSON.stringify(x));
+};
 
-# Paint Model (for fills, strokes)
-class Paint(BaseModel):
-    type: str  # SOLID, GRADIENT_LINEAR, IMAGE, etc.
-    visible: bool = True
-    opacity: float = 1.0
-    color: Optional[Color]
-    gradientHandlePositions: Optional[List[Vector]]
-    gradientStops: Optional[List[Dict[str, Union[float, Color]]]]
-    imageRef: Optional[str]
+// Function to create a rectangle node
+const createRectangle = (name: string, spec: Rectangle): SceneNode => {
+  const node = figma.createRectangle();
+  node.name = name;
+  node.x = spec.position.x;
+  node.y = spec.position.y;
+  node.resize(spec.width, spec.height);
 
-# Transform Matrix
-class Transform(BaseModel):
-    matrix: List[List[float]]
+  // Set colors
+  const fills = clone(node.fills as Array<any>);
+  fills[0].color = spec.color;
+  node.fills = fills;
+  node.strokeWeight = spec.strokeWeight || 0;
+  node.cornerRadius = spec.cornerRadius || 0;
 
-# Common properties for frame and instance nodes
-class Frame(Node):
-    children: List[Node]
-    locked: bool = False
-    backgroundColor: Optional[Color]
-    fills: List[Paint] = []
-    strokes: List[Paint] = []
-    strokeWeight: Optional[float]
-    strokeAlign: Optional[str]  # INSIDE, OUTSIDE, CENTER
-    cornerRadius: Optional[float]
-    size: Vector
-    relativeTransform: Optional[Transform]
-    absoluteBoundingBox: Optional[Rectangle]
-    opacity: float = 1
-    effects: List[Effect] = []
-    exportSettings: List[ExportSetting] = []
+  // Set drop shadow if specified
+  if (spec.dropShadow) {
+    node.effects = [
+      {
+        type: "DROP_SHADOW",
+        color: { r: 0, g: 0, b: 0, a: 0.25 },
+        offset: { x: 0, y: spec.dropShadow },
+        radius: 4,
+        spread: 0,
+        visible: true,
+        blendMode: "NORMAL",
+        showShadowBehindNode: false,
+      },
+    ];
+  }
+  return node;
+};
 
-# Vector node model (extends Frame with vector-specific properties)
-class Vector(Frame):
-    strokeDashes: Optional[List[float]]
-    strokeCap: Optional[str]  # NONE, ROUND, SQUARE, LINE_ARROW, etc.
-    strokeJoin: Optional[str]  # MITER, BEVEL, ROUND
-    strokeMiterAngle: Optional[float] = 28.96
+// Function to create a text node
+const createTextNode = async (textSpec: CustomTextNode): Promise<SceneNode> => {
+  const textNode = figma.createText();
+  textNode.name = textSpec.name;
 
-# Text Style (for TEXT nodes)
-class TextStyle(BaseModel):
-    fontFamily: str
-    fontPostScriptName: Optional[str]
-    paragraphSpacing: Optional[float]
-    paragraphIndent: Optional[float]
-    fontWeight: Optional[float]
-    fontSize: float
-    textAlignHorizontal: Optional[str]  # LEFT, RIGHT, CENTER, etc.
-    textAlignVertical: Optional[str]  # TOP, CENTER, BOTTOM
-    letterSpacing: Optional[float]
-    lineHeight: Optional[float]
+  // Load the font before setting font-related properties
+  if (textSpec.text.fontName) {
+    await figma.loadFontAsync(textSpec.text.fontName);
+    textNode.fontName = textSpec.text.fontName; // Set the font name
+  }
 
-# Text node model (inherits Vector and adds text-specific fields)
-class Text(Vector):
-    characters: str
-    style: TextStyle
-    styleOverrideTable: Optional[Dict[int, TextStyle]]
-    characterStyleOverrides: Optional[List[int]] = []
+  // Set text content
+  textNode.characters = textSpec.text.content;
 
-# Component model (inherits from Frame)
-class Component(Frame):
-    componentPropertyDefinitions: Dict[str, Any] = {}
+  // Optional properties
+  if (textSpec.text.fontSize) {
+    textNode.fontSize = textSpec.text.fontSize;
+  }
 
-# Component Set Model
-class ComponentSet(Frame):
-    componentPropertyDefinitions: Dict[str, Any] = {}
+  if (textSpec.text.color) {
+    const fills = clone(textNode.fills as Array<any>);
+    fills[0].color = textSpec.text.color;
+    textNode.fills = fills;
+  }
 
-# Instance Model (inherits Frame and Component specific fields)
-class Instance(Frame):
-    componentId: str
-    isExposedInstance: bool = False
-    exposedInstances: List[str] = []
-    componentProperties: Dict[str, Union[str, bool]] = {}
-    overrides: Optional[List[str]] = []
+  // Set position if provided
+  if (textSpec.text.position) {
+    textNode.x = textSpec.text.position.x;
+    textNode.y = textSpec.text.position.y;
+  }
 
-# Canvas Model (inherits Node)
-class Canvas(Node):
-    children: List[Frame]
-    backgroundColor: Optional[Color]
+  return textNode;
+};
 
-# Document model (inherits Node and represents the root of the Figma document)
-class Document(Node):
-    children: List[Canvas]
+// Function to create a group of nodes
+const createGroup = (nodes: SceneNode[], frame: FrameNode): GroupNode => {
+  const group = figma.group(nodes, frame);
+  group.x = 0; // Optional: Set the group's position relative to the frame
+  group.y = 0;
+  return group;
+};
 
-# FlowStartingPoint model
-class FlowStartingPoint(BaseModel):
-    nodeId: str
-    name: str
+// Function to create a scene with all nodes, optionally grouped
+const createScene = async (scene: Scene, frame: FrameNode): Promise<FrameNode> => {
+  try {
+    const nodes: SceneNode[] = []; // Collect nodes to be grouped later
+    await Promise.all(
+      scene.map(async (node: Node) => {
+        let createdNode: SceneNode;
+        if (node.type === "RECTANGLE") {
+          createdNode = createRectangle(node.name, node.node);
+        } else if (node.type === "TEXT") {
+          createdNode = await createTextNode(node); // Create text node
+        } else {
+          throw new Error(`Unsupported node type:`);
+        }
+        nodes.push(createdNode); // Store the created node
+      })
+    );
 
-# PrototypeDevice model
-class PrototypeDevice(BaseModel):
-    type: str  # NONE, PRESET, CUSTOM, PRESENTATION
-    size: Vector
-    presetIdentifier: Optional[str]
-    rotation: Optional[str]  # NONE, CCW_90
+    // Optional: Group nodes together if more than one
+    if (nodes.length > 1) {
+      createGroup(nodes, frame); // Group all nodes within the frame
+    } else {
+      // Append the single node directly to the frame if only one node
+      frame.appendChild(nodes[0]);
+    }
 
-# API response schema for Figma file
-class FigmaAPIResponse(BaseModel):
-    document: Document
-    schemaVersion: str
-    name: str
-    lastModified: str
-    thumbnailUrl: AnyUrl
-    version: str
-    role: str
-    flowStartingPoints: Optional[List[FlowStartingPoint]] = []
-    prototypeDevice: Optional[PrototypeDevice]
-......................
+    return frame; // Return the frame containing all nodes
+  } catch (error) {
+    console.error("Error creating scene:", error);
+    throw error; // Re-throw error for higher-level handling
+  }
+};
 
+// Function to parse JSON input and render the scene
+const parseAndRenderJson = async (jsonInput: string) => {
+  try {
+    const scene: Scene = JSON.parse(jsonInput);
+    const frame = figma.createFrame(); // Create a new frame to contain the scene
+    await createScene(scene, frame);
+    figma.currentPage.appendChild(frame); // Append the created frame to the current page
+    figma.viewport.scrollAndZoomIntoView([frame]); // Optional: focus on the created frame
+  } catch (error) {
+    console.error("Failed to parse JSON or render scene:", error);
+  }
+};
 
-        import json
-from pydantic import ValidationError
-from typing import Any
-from pathlib import Path
-from pydantic.error_wrappers import display_errors
-from figma_pydantic_schema import FigmaAPIResponse  # Adjust the import path as needed
-
-# Function to load a JSON file
-def load_json(filepath: str) -> Any:
-    """Load JSON data from a file."""
-    with open(filepath, 'r') as file:
-        return json.load(file)
-
-# Function to validate the Figma API response against the Pydantic schema
-def validate_figma_response(data: dict) -> None:
-    """Validate the Figma API response using Pydantic schema."""
-    try:
-        # Validate the data using the FigmaAPIResponse schema
-        FigmaAPIResponse.parse_obj(data)
-        print("Validation succeeded!")
-    except ValidationError as e:
-        # Handle validation errors and provide detailed feedback
-        print("Validation failed!")
-        for error in e.errors():
-            loc = " -> ".join(str(step) for step in error['loc'])  # JSON path of the error
-            print(f"Error at {loc}: {error['msg']} (expected: {error['type']})")
-        # Optional: print detailed errors using Pydantic's built-in display
-        print(display_errors(e.errors()))
-
-# Main script to load and validate the JSON response
-if __name__ == "__main__":
-    # Load the Figma API response from a file (adjust the path as needed)
-    figma_file_path = 'figma_response.json'  # Change to the path of your Figma API response JSON
-    figma_data = load_json(figma_file_path)
-
-    # Validate the JSON response
-    validate_figma_response(figma_data)
-
+// Plugin entry point
+figma.showUI(__html__);
+figma.ui.onmessage = async (msg) => {
+  if (msg.type === "render") {
+    await parseAndRenderJson(msg.json);
+  }
+};
